@@ -25,8 +25,8 @@ Edit `%APPDATA%\ClipboardAI\config.toml` to customize hotkeys, typewriter settin
 
 - **Send (Ctrl+Alt+Enter)**: Reads clipboard, sends to AI, types response.
 - **Cancel (Ctrl+Alt+Backspace)**: Stops typing immediately.
-- **List Models (Ctrl+Alt+`)**: Fetches and displays available models, copies to clipboard.
-- **Diagnostics (Ctrl+Alt+D)**: Runs health checks, copies report to clipboard.
+- **List Models (Ctrl+Alt+F8)**: Fetches and displays available models, copies to clipboard.
+- **Diagnostics (Ctrl+Alt+F9)**: Runs health checks, copies report to clipboard.
 - **Default Template (Ctrl+Alt+1)**: Switches to default prompt template.
 - **Translate Template (Ctrl+Alt+2)**: Switches to Spanish translation template.
 
@@ -38,4 +38,4 @@ The app simulates keystrokes, so Windows may prompt for keyboard permissions. Al
 
 - Ensure your API key is valid.
 - Check `%APPDATA%\ClipboardAI\logs.txt` if running with `--noconsole`.
-- Run diagnostics (Ctrl+Alt+D) to verify connectivity.
+- Run diagnostics (Ctrl+Alt+F9) to verify connectivity.
