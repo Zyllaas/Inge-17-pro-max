@@ -1,7 +1,8 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-import tomli as tomllib
+from typing import List
+import tomllib
 from dotenv import load_dotenv
 
 from .utils.paths import resource_path
@@ -31,7 +32,7 @@ class Config:
     max_retries: int
 
     # Privacy
-    blocked_patterns: list[str]
+    blocked_patterns: List[str]
 
     # Environment
     api_base: str
@@ -39,27 +40,44 @@ class Config:
     model: str
 
 
+def get_appdata_dir() -> Path:
+    """Get the application data directory."""
+    appdata = os.environ.get('APPDATA', str(Path.home() / 'AppData' / 'Roaming'))
+    return Path(appdata) / 'ClipboardAI'
+
+
 def load_config() -> Config:
-    appdata_dir = Path(os.environ.get('APPDATA', '')) / 'ClipboardAI'
+    """Load configuration from TOML and environment files."""
+    appdata_dir = get_appdata_dir()
     appdata_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load config.toml
+    # Load config.toml (prefer user's copy, fallback to bundled)
     config_path = appdata_dir / 'config.toml'
     if not config_path.exists():
-        config_path = Path(resource_path('config.toml'))
+        bundled_config = Path(resource_path('config.toml'))
+        if bundled_config.exists():
+            import shutil
+            shutil.copy2(bundled_config, config_path)
+        else:
+            config_path = bundled_config
 
     with open(config_path, 'rb') as f:
         config_data = tomllib.load(f)
 
-    # Load .env
+    # Load .env (prefer user's copy, fallback to bundled)
     env_path = appdata_dir / '.env'
     if not env_path.exists():
-        env_path = Path(resource_path('.env.example'))
+        bundled_env = Path(resource_path('.env.example'))
+        if bundled_env.exists():
+            import shutil
+            shutil.copy2(bundled_env, env_path)
+        else:
+            env_path = bundled_env
 
     load_dotenv(env_path)
 
-    api_key_env = os.getenv('API_KEY') or os.getenv('GROQ_API_KEY')
-    api_key = api_key_env if api_key_env else ''
+    # Get environment variables
+    api_key = os.getenv('API_KEY') or os.getenv('GROQ_API_KEY') or ''
     api_base = os.getenv('API_BASE', 'https://api.groq.com/openai/v1')
     model = os.getenv('MODEL', 'llama-3.1-8b-instant')
 
@@ -86,11 +104,17 @@ def load_config() -> Config:
     )
 
 
-def save_env(api_key: str, model: str) -> None:
-    appdata_dir = Path(os.environ.get('APPDATA', '')) / 'ClipboardAI'
+def save_env_file(api_key: str, model: str, api_base: str = None) -> None:
+    """Save environment variables to .env file."""
+    appdata_dir = get_appdata_dir()
     appdata_dir.mkdir(parents=True, exist_ok=True)
+    
     env_path = appdata_dir / '.env'
-    with open(env_path, 'w') as f:
-        f.write(f'API_KEY={api_key}\n')
+    
+    if api_base is None:
+        api_base = 'https://api.groq.com/openai/v1'
+    
+    with open(env_path, 'w', encoding='utf-8') as f:
+        f.write(f'API_BASE={api_base}\n')
+        f.write(f'GROQ_API_KEY={api_key}\n')
         f.write(f'MODEL={model}\n')
-        f.write('API_BASE=https://api.groq.com/openai/v1\n')

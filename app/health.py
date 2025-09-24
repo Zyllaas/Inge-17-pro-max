@@ -1,5 +1,5 @@
+import asyncio
 import socket
-import time
 from urllib.parse import urlparse
 import httpx
 
@@ -7,88 +7,139 @@ from .ai_client import GroqClient
 from .config import Config
 
 
-def run_health_check(config: Config, client: GroqClient) -> str:
-    """Run diagnostics and return report string."""
+async def run_health_check(config: Config, client: GroqClient) -> str:
+    """Run comprehensive diagnostics and return formatted report."""
     report_lines = []
-    overall = "OK"
-    rate_limit_warn = False
-    server_warn = False
-    model_active_warn = False
+    overall_status = "OK"
+    warnings = []
+    failures = []
 
-    # ENV
-    env_status = "OK" if config.api_key else "FAIL"
-    if env_status == "FAIL":
-        overall = "FAIL"
-    report_lines.append(f"ENV: {env_status}")
+    # Helper function to add check result
+    def add_check(name: str, status: str, details: str = ""):
+        nonlocal overall_status
+        result = f"{name}: {status}"
+        if details:
+            result += f" - {details}"
+        report_lines.append(result)
+        
+        if status == "FAIL":
+            failures.append(name)
+            overall_status = "FAIL"
+        elif status == "WARN":
+            warnings.append(name)
+            if overall_status == "OK":
+                overall_status = "WARN"
 
-    # API_BASE
-    api_base_status = "FAIL"
+    # 1. ENV Check
     try:
-        parsed = urlparse(config.api_base)
-        if parsed.scheme == "https" and parsed.netloc:
-            socket.gethostbyname(parsed.netloc)
-            api_base_status = "OK"
-    except Exception:
-        pass
-    if api_base_status == "FAIL":
-        overall = "FAIL"
-    report_lines.append(f"API_BASE: {api_base_status}")
+        if config.api_key:
+            add_check("ENV", "OK", "API key present")
+        else:
+            add_check("ENV", "FAIL", "No API key found")
+    except Exception as e:
+        add_check("ENV", "FAIL", str(e))
 
-    # MODELS
-    models_status = "FAIL"
+    # 2. API_BASE Check
+    try:
+        parsed_url = urlparse(config.api_base)
+        if parsed_url.scheme == "https" and parsed_url.netloc:
+            # Test DNS resolution
+            socket.gethostbyname(parsed_url.netloc)
+            add_check("API_BASE", "OK", f"{config.api_base}")
+        else:
+            add_check("API_BASE", "FAIL", "Invalid URL format")
+    except socket.gaierror:
+        add_check("API_BASE", "FAIL", "DNS resolution failed")
+    except Exception as e:
+        add_check("API_BASE", "FAIL", str(e))
+
+    # 3. AUTH Check (implicit with models call)
+    auth_status = "PENDING"
+    
+    # 4. MODELS Check
     models = []
     try:
-        models = client.list_models()
+        models = await client.list_models()
         if models:
-            models_status = "OK"
+            add_check("MODELS", "OK", f"Found {len(models)} models")
+            auth_status = "OK"
+        else:
+            add_check("MODELS", "FAIL", "No models returned")
+            auth_status = "FAIL"
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            rate_limit_warn = True
+        if e.response.status_code == 401:
+            add_check("MODELS", "FAIL", "Authentication failed")
+            auth_status = "FAIL"
+        elif e.response.status_code == 429:
+            add_check("MODELS", "WARN", "Rate limited")
+            auth_status = "WARN"
         elif 500 <= e.response.status_code < 600:
-            server_warn = True
-    except Exception:
-        pass
-    if models_status == "FAIL":
-        overall = "FAIL"
-    report_lines.append(f"MODELS: {models_status}")
+            add_check("MODELS", "WARN", f"Server error {e.response.status_code}")
+            auth_status = "WARN"
+        else:
+            add_check("MODELS", "FAIL", f"HTTP {e.response.status_code}")
+            auth_status = "FAIL"
+    except Exception as e:
+        add_check("MODELS", "FAIL", str(e))
+        auth_status = "FAIL"
 
-    # MODEL ACTIVE
-    model_active_status = "WARN" if config.model not in models else "OK"
-    if model_active_status == "WARN":
-        model_active_warn = True
-    report_lines.append(f"MODEL ACTIVE: {model_active_status}")
+    # Add AUTH check result
+    add_check("AUTH", auth_status)
 
-    # COMPLETION
+    # 5. MODEL ACTIVE Check
+    if models and config.model in models:
+        add_check("MODEL ACTIVE", "OK", config.model)
+    elif models:
+        add_check("MODEL ACTIVE", "WARN", f"{config.model} not in available models")
+    else:
+        add_check("MODEL ACTIVE", "FAIL", "Cannot verify - no models available")
+
+    # 6. COMPLETION Check
     completion_status = "FAIL"
-    latency = 0
+    latency_ms = 0
     try:
-        start = time.time()
-        response = client.complete("Respond exactly: pong: ok")
-        latency = int((time.time() - start) * 1000)
-        if "pong: ok" in response:
-            completion_status = "OK"
+        response, latency_ms = await client.test_completion()
+        if "pong: ok" in response.lower():
+            add_check("COMPLETION", "OK", f"{latency_ms}ms")
+        else:
+            add_check("COMPLETION", "FAIL", f"Invalid response: {response[:50]}")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
-            rate_limit_warn = True
+            add_check("COMPLETION", "WARN", "Rate limited")
         elif 500 <= e.response.status_code < 600:
-            server_warn = True
-    except Exception:
-        pass
-    if completion_status == "FAIL":
-        overall = "FAIL"
-    report_lines.append(f"COMPLETION: {completion_status} ({latency}ms)")
+            add_check("COMPLETION", "WARN", f"Server error {e.response.status_code}")
+        else:
+            add_check("COMPLETION", "FAIL", f"HTTP {e.response.status_code}")
+    except Exception as e:
+        add_check("COMPLETION", "FAIL", str(e))
 
-    # RATE-LIMIT
-    rate_limit_status = "WARN" if rate_limit_warn else "OK"
-    report_lines.append(f"RATE-LIMIT: {rate_limit_status}")
+    # 7. RATE-LIMIT Check (based on previous calls)
+    rate_limit_issues = any("Rate limited" in line for line in report_lines)
+    if rate_limit_issues:
+        add_check("RATE-LIMIT", "WARN", "Rate limiting detected")
+    else:
+        add_check("RATE-LIMIT", "OK")
 
-    # SERVER
-    server_status = "WARN" if server_warn else "OK"
-    report_lines.append(f"SERVER: {server_status}")
+    # 8. SERVER Check (based on previous calls)
+    server_issues = any("Server error" in line for line in report_lines)
+    if server_issues:
+        add_check("SERVER", "WARN", "Server issues detected")
+    else:
+        add_check("SERVER", "OK")
 
-    # Overall
-    if overall == "OK" and (rate_limit_warn or server_warn or model_active_warn):
-        overall = "WARN"
-    report_lines.append(f"HEALTH: {overall}")
+    # Final HEALTH summary
+    report_lines.append("-" * 50)
+    if overall_status == "FAIL":
+        add_check("HEALTH", "FAIL", f"Critical issues: {', '.join(failures)}")
+    elif overall_status == "WARN":
+        add_check("HEALTH", "WARN", f"Warnings: {', '.join(warnings)}")
+    else:
+        add_check("HEALTH", "OK", "All systems operational")
+
+    # Add summary
+    report_lines.append("")
+    report_lines.append(f"Config: {config.model} @ {config.api_base}")
+    if latency_ms > 0:
+        report_lines.append(f"Response time: {latency_ms}ms")
 
     return "\n".join(report_lines)

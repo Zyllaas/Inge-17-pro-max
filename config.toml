@@ -5,19 +5,25 @@ hotkey_list_models = "ctrl+alt+f8"
 hotkey_diagnostics = "ctrl+alt+f9"
 hotkey_template_default = "ctrl+alt+1"
 hotkey_template_translate = "ctrl+alt+2"
-autopaste = false
+autopaste = true
 
 [typewriter]
-min_cps = 6
-max_cps = 12
-jitter_ms = 60
-punct_pause_ms = 220
-newline_pause_ms = 150
+min_cps = 8
+max_cps = 15
+jitter_ms = 50
+punct_pause_ms = 200
+newline_pause_ms = 300
 preserve_clipboard = true
 
 [api]
-timeout_seconds = 60
+timeout_seconds = 30
 max_retries = 3
 
 [privacy]
-blocked_patterns = ["sk-[A-Za-z0-9]{20,}", "password=", "Authorization: Bearer "]
+blocked_patterns = [
+    "sk-[A-Za-z0-9]{20,}",
+    "password\\s*=\\s*\\S+", 
+    "Authorization:\\s*Bearer\\s+\\S+",
+    "api_key\\s*=\\s*\\S+",
+    "secret\\s*=\\s*\\S+"
+]
